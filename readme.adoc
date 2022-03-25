@@ -1,0 +1,35 @@
+= Tracking Maven Extension
+
+This library should be put into `$MAVEN_HOME/lib/ext`. It registers a
+`org.eclipse.aether.RepositoryListener` and overrides a bit `org.eclipse.aether.internal.impl.collect.DefaultDependencyCollector` from `maven-resolver-impl` (just to open it for extension).
+Then each call to `org.eclipse.aether.internal.impl.collect.DefaultDependencyCollector.processDependency()` is
+wrapped to keep track of current dependency being resolved.
+
+Each resolution attempt is tracked in local Maven repository, so:
+
+* when an artifact is downloaded from remote repository, some information is written to `_dependency-tracker.txt`
+file stored next to the downloaded artifact (like the reverse tracking of the dependency that transitively required this artifact or URI of the remote repository)
+* when an artifact is simply being found in local repository, a tracking file is written into `.tracking/`
+directory next to the artifact being found, to store information about dependency that lead to this artifact.
+
+For example, local repository contains log4j 1.2.12 dependency and several related `.tracking/*.dep` files:
+
+* org.apache.maven.plugins_maven-compiler-plugin_jar_3.1.dep
+* org.apache.maven.plugins_maven-dependency-plugin_jar_3.0.1.dep
+* org.apache.maven.plugins_maven-plugin-plugin_jar_3.6.4.dep
+* org.apache.maven.plugins_maven-remote-resources-plugin_jar_1.7.0.dep
+* org.apache.maven.plugins_maven-site-plugin_jar_3.11.0.dep
+
+The names of the above files are derived from top-level artifact (dependency or a plugin) that needed (directly or transitively) given artifact where `.tracking/` directory is located. For example `org.apache.maven.plugins_maven-plugin-plugin_jar_3.6.4.dep` contains:
+
+[listing,options="nowrap"]
+----
+log4j:log4j:pom:1.2.12
+ -> commons-logging:commons-logging:jar:1.1 (compile) (context: plugin)
+   -> commons-digester:commons-digester:jar:1.8 (compile) (context: plugin)
+     -> org.apache.velocity:velocity-tools:jar:2.0 (compile) (context: plugin)
+       -> org.apache.maven.doxia:doxia-site-renderer:jar:1.11.1 (compile) (context: plugin)
+         -> org.apache.maven.plugins:maven-plugin-plugin:jar:3.6.4 () (context: plugin)
+----
+
+This file shows that eventually/transitively `maven-plugin-plugin:3.6.4` needs `log4j:1.2.12`...
