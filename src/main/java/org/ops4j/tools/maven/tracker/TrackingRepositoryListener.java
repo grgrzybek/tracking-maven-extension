@@ -19,6 +19,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.Deque;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
@@ -56,6 +57,12 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
     }
 
     @Override
+    public void artifactResolved(RepositoryEvent event) {
+        write(event);
+        super.artifactResolved(event);
+    }
+
+    @Override
     public void metadataDownloaded(RepositoryEvent event) {
         write(event);
         super.metadataDownloaded(event);
@@ -66,14 +73,26 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
         super.metadataDownloading(event);
     }
 
+    @Override
+    public void metadataResolved(RepositoryEvent event) {
+        write(event);
+        super.metadataResolved(event);
+    }
+
     private static final String[] INDENTS = new String[] {
             "", "  ", "    ", "      ", "        ", "          ", "            "
     };
 
     private void write(RepositoryEvent event) {
         if (event.getFile() == null) {
+            // missing artifact
+            File dir = event.getSession().getLocalRepository().getBasedir();
+            dir = new File(dir, event.getSession().getLocalRepositoryManager().getPathForLocalArtifact(event.getArtifact()));
+            dir = dir.getParentFile();
+            trackDependencies(stack, dir, event.getArtifact(), event);
             return;
         }
+
         File dir = event.getFile().getParentFile();
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(new File(dir, "_dependency-tracker.txt"), true))) {
             RequestTrace trace = event.getTrace();
@@ -124,7 +143,7 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
                         indent2.append(" -> ");
                         writer.write(String.format("%s%s (context: %s)\n", indent2.toString(), dn.toString(), dn.getRequestContext()));
                     }
-                    trackDependencies(stack, dir, event.getArtifact());
+                    trackDependencies(stack, dir, event.getArtifact(), event);
 
                     indent++;
                 } else if (data instanceof CollectRequest) {
@@ -165,7 +184,7 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
         }
     }
 
-    public static void trackDependencies(Deque<DependencyNode> stack, File dir, Artifact artifact) {
+    public static void trackDependencies(Deque<DependencyNode> stack, File dir, Artifact artifact, RepositoryEvent event) {
         if (artifact == null) {
             return;
         }
@@ -173,7 +192,11 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
         if (dir2.mkdirs() || dir2.isDirectory()) {
             DependencyNode dep = TrackingRepositoryListener.stack.peekLast();
             if (dep != null) {
-                String directRequirer = dep.getArtifact().toString().replace(":", "_") + ".dep";
+                String ext = ".dep";
+                if (event != null && event.getException() != null) {
+                    ext = ".miss";
+                }
+                String directRequirer = dep.getArtifact().toString().replace(":", "_") + ext;
                 File tracker = new File(dir2, directRequirer);
                 if (!tracker.isFile()) {
                     try (BufferedWriter writer = new BufferedWriter(new FileWriter(tracker))) {
@@ -187,6 +210,10 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
                             indent++;
                             indent2.append(" -> ");
                             writer.write(String.format("%s%s (context: %s)\n", indent2.toString(), dn.toString(), dn.getRequestContext()));
+                        }
+                        if (event != null && event.getException() != null) {
+                            writer.write("\n");
+                            event.getException().printStackTrace(new PrintWriter(writer));
                         }
                     } catch (IOException ignored) {
                     }

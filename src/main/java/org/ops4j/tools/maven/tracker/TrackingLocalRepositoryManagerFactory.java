@@ -79,7 +79,7 @@ public class TrackingLocalRepositoryManagerFactory extends EnhancedLocalReposito
             if (result != null && result.getFile() != null) {
                 // track the dependency chain
                 TrackingRepositoryListener.trackDependencies(TrackingRepositoryListener.stack,
-                        result.getFile().getParentFile(), result.getRequest().getArtifact());
+                        result.getFile().getParentFile(), result.getRequest().getArtifact(), null);
             }
             return result;
         }
