@@ -85,14 +85,19 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
 
     private void write(RepositoryEvent event) {
         if (event.getFile() == null) {
-            // missing artifact
-            File dir = event.getSession().getLocalRepository().getBasedir();
-            dir = new File(dir, event.getSession().getLocalRepositoryManager().getPathForLocalArtifact(event.getArtifact()));
-            dir = dir.getParentFile();
-            trackDependencies(stack, dir, event.getArtifact(), event);
+            if (event.getArtifact() != null) {
+                // missing artifact
+                File dir = event.getSession().getLocalRepository().getBasedir();
+                dir = new File(dir, event.getSession().getLocalRepositoryManager().getPathForLocalArtifact(event.getArtifact()));
+                dir = dir.getParentFile();
+                trackDependencies(stack, dir, event.getArtifact(), event);
+            }
             return;
         }
 
+        if (event.getRepository() != null && event.getRepository().getId().equalsIgnoreCase("workspace")) {
+            return;
+        }
         File dir = event.getFile().getParentFile();
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(new File(dir, "_dependency-tracker.txt"), true))) {
             RequestTrace trace = event.getTrace();
