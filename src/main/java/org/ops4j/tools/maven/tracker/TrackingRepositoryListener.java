@@ -15,17 +15,19 @@
  */
 package org.ops4j.tools.maven.tracker;
 
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Deque;
-import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.List;
+import java.util.ListIterator;
 
 import org.apache.maven.model.InputLocation;
 import org.apache.maven.model.Plugin;
-import org.apache.maven.model.building.DefaultModelBuildingRequest;
 import org.apache.maven.project.DefaultDependencyResolutionRequest;
 import org.codehaus.plexus.component.annotations.Component;
 import org.eclipse.aether.AbstractRepositoryListener;
@@ -34,8 +36,9 @@ import org.eclipse.aether.RepositoryListener;
 import org.eclipse.aether.RequestTrace;
 import org.eclipse.aether.artifact.Artifact;
 import org.eclipse.aether.collection.CollectRequest;
-import org.eclipse.aether.graph.Dependency;
+import org.eclipse.aether.collection.CollectStepData;
 import org.eclipse.aether.graph.DependencyNode;
+import org.eclipse.aether.repository.RemoteRepository;
 import org.eclipse.aether.resolution.ArtifactDescriptorRequest;
 import org.eclipse.aether.resolution.ArtifactRequest;
 import org.eclipse.aether.resolution.DependencyRequest;
@@ -43,188 +46,202 @@ import org.eclipse.aether.resolution.DependencyRequest;
 @Component(role = RepositoryListener.class)
 public class TrackingRepositoryListener extends AbstractRepositoryListener {
 
-    static Deque<DependencyNode> stack = new ConcurrentLinkedDeque<>();
-
-    @Override
-    public void artifactDownloaded(RepositoryEvent event) {
-        write(event);
-        super.artifactDownloaded(event);
-    }
-
-    @Override
-    public void artifactDownloading(RepositoryEvent event) {
-        super.artifactDownloading(event);
-    }
-
     @Override
     public void artifactResolved(RepositoryEvent event) {
         write(event);
-        super.artifactResolved(event);
-    }
-
-    @Override
-    public void metadataDownloaded(RepositoryEvent event) {
-        write(event);
-        super.metadataDownloaded(event);
-    }
-
-    @Override
-    public void metadataDownloading(RepositoryEvent event) {
-        super.metadataDownloading(event);
     }
 
     @Override
     public void metadataResolved(RepositoryEvent event) {
         write(event);
-        super.metadataResolved(event);
     }
 
-    private static final String[] INDENTS = new String[] {
-            "", "  ", "    ", "      ", "        ", "          ", "            "
-    };
-
     private void write(RepositoryEvent event) {
+        if (event.getArtifact() == null) {
+            // nothing we can track
+            return;
+        }
+        if (event.getRepository() != null && "workspace".equalsIgnoreCase(event.getRepository().getId())) {
+            // artifact resolved through the reactor/IDE - no need to track it
+            return;
+        }
+
+        File dir = null;
+        boolean missing = false;
+
         if (event.getFile() == null) {
-            if (event.getArtifact() != null) {
-                // missing artifact
-                File dir = event.getSession().getLocalRepository().getBasedir();
-                dir = new File(dir, event.getSession().getLocalRepositoryManager().getPathForLocalArtifact(event.getArtifact()));
-                dir = dir.getParentFile();
-                trackDependencies(stack, dir, event.getArtifact(), event);
+            // missing artifact - let's track the path anyway
+            missing = true;
+            dir = event.getSession().getLocalRepository().getBasedir();
+            dir = new File(dir, event.getSession().getLocalRepositoryManager().getPathForLocalArtifact(event.getArtifact()));
+            dir = dir.getParentFile();
+        } else {
+            dir = event.getFile().getParentFile();
+        }
+
+        // https://github.com/apache/maven-resolver/pull/182
+        // the most important data we're looking for is org.eclipse.aether.collection.CollectStepData
+        // which contains the path to the resolved artifact
+        // but we can also add some more information from other kinds of org.eclipse.aether.RequestTrace.data
+
+        RequestTrace trace = event.getTrace();
+
+        ArtifactDescriptorRequest adr = null;
+        CollectRequest cr = null;
+        CollectStepData csd = null;
+        ArtifactRequest ar = null;
+        Plugin plugin = null;
+        DependencyRequest dr = null;
+        DefaultDependencyResolutionRequest ddrr = null;
+
+        while (trace != null) {
+            Object data = trace.getData();
+            if (data instanceof ArtifactDescriptorRequest) {
+                adr = (ArtifactDescriptorRequest) data;
+            } else if (data instanceof CollectStepData) {
+                csd = (CollectStepData) data;
+            } else if (data instanceof DefaultDependencyResolutionRequest) {
+                ddrr = (DefaultDependencyResolutionRequest) data;
+            } else if (data instanceof DependencyRequest) {
+                dr = (DependencyRequest) data;
+            } else if (data instanceof ArtifactRequest) {
+                ar = (ArtifactRequest) data;
+            } else if (data instanceof Plugin) {
+                plugin = (Plugin) data;
             }
-            return;
+            trace = trace.getParent();
         }
 
-        if (event.getRepository() != null && event.getRepository().getId().equalsIgnoreCase("workspace")) {
-            return;
-        }
-        File dir = event.getFile().getParentFile();
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(new File(dir, "_dependency-tracker.txt"), true))) {
-            RequestTrace trace = event.getTrace();
-            writer.write("~~~\n");
-            int indent = 0;
-            while (trace != null) {
-                Object data = trace.getData();
-                if (data instanceof ArtifactDescriptorRequest) {
-                    ArtifactDescriptorRequest adr = (ArtifactDescriptorRequest) data;
-                    Artifact a = adr.getArtifact();
-                    String scope = "?";
-                    CollectRequest cr = null;
-                    RequestTrace _trace = trace;
-                    while (_trace != null) {
-                        if (_trace.getData() instanceof CollectRequest) {
-                            for (Dependency d : ((CollectRequest) _trace.getData()).getDependencies()) {
-                                if (d != null && d.getArtifact() != null && d.getArtifact() == a) {
-                                    scope = d.getScope();
-                                    if (d.isOptional()) {
-                                        scope += "/optional";
-                                    }
-                                    break;
-                                }
-                            }
-                            break;
-                        }
-                        _trace = _trace.getParent();
-                    }
-                    writer.write(String.format("%sReading descriptor for artifact %s:%s:%s%s:%s (context: %s) (scope: %s) (repository: %s)\n",
-                            INDENTS[indent], a.getGroupId(), a.getArtifactId(), a.getExtension(),
-                            a.getClassifier() != null ? ":" + a.getClassifier() : "",
-                            a.getVersion(), adr.getRequestContext(), scope, event.getRepository() == null ? "?" : event.getRepository().toString()));
-                    indent++;
-                } else if (data instanceof ArtifactRequest) {
-                    ArtifactRequest ar = (ArtifactRequest) data;
-                    Artifact a = ar.getArtifact();
-                    writer.write(String.format("%sDownloaded artifact %s:%s:%s%s:%s (repository: %s)\n",
-                            INDENTS[indent], a.getGroupId(), a.getArtifactId(), a.getExtension(),
-                            a.getClassifier() != null ? ":" + a.getClassifier() : "",
-                            a.getVersion(), event.getRepository() == null ? "?" : event.getRepository().toString()));
-                    int id2 = 1;
-                    for (DependencyNode dn : stack) {
-                        StringBuilder indent2 = new StringBuilder();
-                        for (int i = 0; i < indent + id2; i++) {
-                            indent2.append("  ");
-                        }
-                        id2++;
-                        indent2.append(" -> ");
-                        writer.write(String.format("%s%s (context: %s)\n", indent2.toString(), dn.toString(), dn.getRequestContext()));
-                    }
-                    trackDependencies(stack, dir, event.getArtifact(), event);
+        try {
+            Path trackingDir = dir.toPath().resolve(".tracking");
+            Files.createDirectories(trackingDir);
 
-                    indent++;
-                } else if (data instanceof CollectRequest) {
-                    CollectRequest cr = (CollectRequest) data;
-                    if (cr.getRoot() != null) {
-                        writer.write(String.format("%sTransitive dependencies collection for %s\n",
-                                INDENTS[indent], cr.getRoot()));
+            String baseName = null;
+            String ext = missing ? ".miss" : ".dep";
+            Path trackingFile = null;
+
+            StringBuilder sb = new StringBuilder();
+
+            if (csd == null) {
+                // no recorder path to the artifact resolved
+                if (plugin != null) {
+                    ext = ".plugin";
+                    baseName = plugin.getGroupId() + "_" + plugin.getArtifactId() + "_" + plugin.getVersion();
+                    trackingFile = trackingDir.resolve(baseName + ext);
+                    if (Files.exists(trackingFile)) {
+                        return;
                     }
-                    if (cr.getRootArtifact() != null) {
-                        writer.write(String.format("%sTransitive dependencies collection for %s\n",
-                                INDENTS[indent], cr.getRootArtifact()));
+
+                    StringBuilder indent = new StringBuilder();
+
+                    if (ar != null && ar.getArtifact() != null) {
+                        sb.append(indent.toString()).append(ar.getArtifact()).append("\n");
+                        indent.append("  ");
                     }
-                    indent++;
-                } else if (data instanceof DefaultModelBuildingRequest) {
-                    DefaultModelBuildingRequest mbr = (DefaultModelBuildingRequest) data;
-                    writer.write(String.format("%sModel building for %s\n",
-                            INDENTS[indent], mbr.getModelSource().getLocation()));
-                    indent++;
-                } else if (data instanceof DefaultDependencyResolutionRequest) {
-                    DefaultDependencyResolutionRequest drr = (DefaultDependencyResolutionRequest) data;
-                } else if (data instanceof DependencyRequest) {
-                    DependencyRequest dr = (DependencyRequest) data;
-                } else if (data instanceof Plugin) {
-                    Plugin plugin = (Plugin) data;
+
+                    sb.append(indent.toString())
+                            .append(plugin.getGroupId())
+                            .append(":")
+                            .append(plugin.getArtifactId())
+                            .append(":")
+                            .append(plugin.getVersion())
+                            .append("\n");
+                    indent.append("  ");
+
                     InputLocation location = plugin.getLocation("");
-                    String modelId = "?";
-                    if (location != null) {
-                        modelId = location.getSource() == null ? "?" : location.getSource().getModelId();
+                    if (location != null && location.getSource() != null) {
+                        sb.append(indent.toString()).append(location.getSource().getModelId()).append(" (implicit)\n");
                     }
-                    writer.write(String.format("%sResolution of plugin %s:%s:%s (%s)\n",
-                            INDENTS[indent], plugin.getGroupId(), plugin.getArtifactId(), plugin.getVersion(), modelId));
-                    indent++;
+                } else if (dr != null) {
+                    baseName = dr.getRoot().toString().replace(":", "_");
+                    trackingFile = trackingDir.resolve(baseName + ext);
+                    if (Files.exists(trackingFile)) {
+                        return;
+                    }
+                    sb.append(dr.getRoot()).append("\n");
                 }
-                trace = trace.getParent();
+            } else {
+                baseName = csd.getPath().get(0).getArtifact().toString().replace(":", "_");
+                trackingFile = trackingDir.resolve(baseName + ext);
+                if (Files.exists(trackingFile)) {
+                    return;
+                }
+
+                StringBuilder indent = new StringBuilder();
+
+                if (ar != null && ar.getArtifact() != null) {
+                    sb.append(indent.toString()).append(ar.getArtifact()).append("\n");
+                    indent.append("  ");
+                }
+
+                sb.append(indent.toString()).append(csd.getNode())
+                        .append(" (")
+                        .append(csd.getContext())
+                        .append(")\n");
+
+                // we have a path to dependency
+                ListIterator<DependencyNode> iter = csd.getPath().listIterator(csd.getPath().size());
+                while (iter.hasPrevious()) {
+                    DependencyNode curr = iter.previous();
+                    indent.append("  ");
+                    sb.append(indent.toString()).append(curr)
+                            .append(" (")
+                            .append(csd.getContext())
+                            .append(")\n");
+                }
+            }
+
+            if (trackingFile != null) {
+                if (!missing) {
+                    if (event.getRepository() != null) {
+                        sb.append("\nRepository: ").append(event.getRepository()).append("\n");
+                    }
+                } else {
+                    List<RemoteRepository> repositories = new ArrayList<>();
+                    if (ar != null && ar.getRepositories() != null) {
+                        repositories.addAll(ar.getRepositories());
+                    } else if (adr != null && adr.getRepositories() != null) {
+                        repositories.addAll(adr.getRepositories());
+                    }
+                    if (!repositories.isEmpty()) {
+                        sb.append("\nConfigured repositories:\n");
+                        for (RemoteRepository r : repositories) {
+                            sb.append(" * ").append(r.getId()).append(" : ").append(r.getUrl()).append("\n");
+                        }
+                    } else {
+                        sb.append("\nConfigured repositories:\n");
+                    }
+                }
+                Files.write(trackingFile, sb.toString().getBytes(StandardCharsets.UTF_8));
+            } else {
+                System.out.println("?");
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            throw new UncheckedIOException(e.getMessage(), e);
         }
     }
 
     public static void trackDependencies(Deque<DependencyNode> stack, File dir, Artifact artifact, RepositoryEvent event) {
-        if (artifact == null) {
-            return;
-        }
-        File dir2 = new File(dir, ".tracking");
-        if (dir2.mkdirs() || dir2.isDirectory()) {
-            DependencyNode dep = TrackingRepositoryListener.stack.peekLast();
-            if (dep != null) {
-                String ext = ".dep";
-                if (event != null && event.getException() != null) {
-                    ext = ".miss";
-                }
-                String directRequirer = dep.getArtifact().toString().replace(":", "_") + ext;
-                File tracker = new File(dir2, directRequirer);
-                if (!tracker.isFile()) {
-                    try (BufferedWriter writer = new BufferedWriter(new FileWriter(tracker))) {
-                        writer.write(String.format("%s\n", artifact.toString()));
-                        int indent = 0;
-                        for (DependencyNode dn : TrackingRepositoryListener.stack) {
-                            StringBuilder indent2 = new StringBuilder();
-                            for (int i = 0; i < indent; i++) {
-                                indent2.append("  ");
-                            }
-                            indent++;
-                            indent2.append(" -> ");
-                            writer.write(String.format("%s%s (context: %s)\n", indent2.toString(), dn.toString(), dn.getRequestContext()));
-                        }
-                        if (event != null && event.getException() != null) {
-                            writer.write("\n");
-                            event.getException().printStackTrace(new PrintWriter(writer));
-                        }
-                    } catch (IOException ignored) {
-                    }
-                }
-            }
-        }
+//                if (!tracker.isFile()) {
+//                    try (BufferedWriter writer = new BufferedWriter(new FileWriter(tracker))) {
+//                        writer.write(String.format("%s\n", artifact.toString()));
+//                        int indent = 0;
+//                        for (DependencyNode dn : TrackingRepositoryListener.stack) {
+//                            StringBuilder indent2 = new StringBuilder();
+//                            for (int i = 0; i < indent; i++) {
+//                                indent2.append("  ");
+//                            }
+//                            indent++;
+//                            indent2.append(" -> ");
+//                            writer.write(String.format("%s%s (context: %s)\n", indent2.toString(), dn.toString(), dn.getRequestContext()));
+//                        }
+//                        if (event != null && event.getException() != null) {
+//                            writer.write("\n");
+//                            event.getException().printStackTrace(new PrintWriter(writer));
+//                        }
+//                    } catch (IOException ignored) {
+//                    }
+//                }
     }
 
 }
