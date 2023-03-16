@@ -22,7 +22,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.ListIterator;
 
@@ -30,13 +29,11 @@ import org.apache.maven.model.InputLocation;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.model.building.DefaultModelBuildingRequest;
 import org.apache.maven.model.building.FileModelSource;
-import org.apache.maven.project.DefaultDependencyResolutionRequest;
 import org.codehaus.plexus.component.annotations.Component;
 import org.eclipse.aether.AbstractRepositoryListener;
 import org.eclipse.aether.RepositoryEvent;
 import org.eclipse.aether.RepositoryListener;
 import org.eclipse.aether.RequestTrace;
-import org.eclipse.aether.artifact.Artifact;
 import org.eclipse.aether.collection.CollectRequest;
 import org.eclipse.aether.collection.CollectStepData;
 import org.eclipse.aether.graph.DependencyNode;
@@ -68,7 +65,7 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
             return;
         }
 
-        File dir = null;
+        File dir;
         boolean missing = false;
 
         if (event.getFile() == null) {
@@ -94,7 +91,7 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
         ArtifactRequest ar = null;
         Plugin plugin = null;
         DependencyRequest dr = null;
-        DefaultDependencyResolutionRequest ddrr = null;
+//        DefaultDependencyResolutionRequest ddrr = null;
         DefaultModelBuildingRequest dmbr = null;
 
         while (trace != null) {
@@ -103,8 +100,8 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
                 adr = (ArtifactDescriptorRequest) data;
             } else if (data instanceof CollectStepData) {
                 csd = (CollectStepData) data;
-            } else if (data instanceof DefaultDependencyResolutionRequest) {
-                ddrr = (DefaultDependencyResolutionRequest) data;
+//            } else if (data instanceof DefaultDependencyResolutionRequest) {
+//                ddrr = (DefaultDependencyResolutionRequest) data;
             } else if (data instanceof DependencyRequest) {
                 dr = (DependencyRequest) data;
             } else if (data instanceof ArtifactRequest) {
@@ -121,7 +118,7 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
             Path trackingDir = dir.toPath().resolve(".tracking");
             Files.createDirectories(trackingDir);
 
-            String baseName = null;
+            String baseName;
             String ext = missing ? ".miss" : ".dep";
             Path trackingFile = null;
 
@@ -251,35 +248,10 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
                     }
                 }
                 Files.write(trackingFile, sb.toString().getBytes(StandardCharsets.UTF_8));
-            } else {
-//                System.out.println("?");
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e.getMessage(), e);
         }
-    }
-
-    public static void trackDependencies(Deque<DependencyNode> stack, File dir, Artifact artifact, RepositoryEvent event) {
-//                if (!tracker.isFile()) {
-//                    try (BufferedWriter writer = new BufferedWriter(new FileWriter(tracker))) {
-//                        writer.write(String.format("%s\n", artifact.toString()));
-//                        int indent = 0;
-//                        for (DependencyNode dn : TrackingRepositoryListener.stack) {
-//                            StringBuilder indent2 = new StringBuilder();
-//                            for (int i = 0; i < indent; i++) {
-//                                indent2.append("  ");
-//                            }
-//                            indent++;
-//                            indent2.append(" -> ");
-//                            writer.write(String.format("%s%s (context: %s)\n", indent2.toString(), dn.toString(), dn.getRequestContext()));
-//                        }
-//                        if (event != null && event.getException() != null) {
-//                            writer.write("\n");
-//                            event.getException().printStackTrace(new PrintWriter(writer));
-//                        }
-//                    } catch (IOException ignored) {
-//                    }
-//                }
     }
 
 }
