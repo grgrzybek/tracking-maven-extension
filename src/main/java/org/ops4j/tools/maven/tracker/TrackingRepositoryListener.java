@@ -34,7 +34,7 @@ import org.eclipse.aether.AbstractRepositoryListener;
 import org.eclipse.aether.RepositoryEvent;
 import org.eclipse.aether.RepositoryListener;
 import org.eclipse.aether.RequestTrace;
-import org.eclipse.aether.collection.CollectRequest;
+import org.eclipse.aether.artifact.Artifact;
 import org.eclipse.aether.collection.CollectStepData;
 import org.eclipse.aether.graph.DependencyNode;
 import org.eclipse.aether.repository.RemoteRepository;
@@ -47,11 +47,6 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
 
     @Override
     public void artifactResolved(RepositoryEvent event) {
-        write(event);
-    }
-
-    @Override
-    public void metadataResolved(RepositoryEvent event) {
         write(event);
     }
 
@@ -86,12 +81,10 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
         RequestTrace trace = event.getTrace();
 
         ArtifactDescriptorRequest adr = null;
-        CollectRequest cr = null;
         CollectStepData csd = null;
         ArtifactRequest ar = null;
         Plugin plugin = null;
         DependencyRequest dr = null;
-//        DefaultDependencyResolutionRequest ddrr = null;
         DefaultModelBuildingRequest dmbr = null;
 
         while (trace != null) {
@@ -100,8 +93,6 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
                 adr = (ArtifactDescriptorRequest) data;
             } else if (data instanceof CollectStepData) {
                 csd = (CollectStepData) data;
-//            } else if (data instanceof DefaultDependencyResolutionRequest) {
-//                ddrr = (DefaultDependencyResolutionRequest) data;
             } else if (data instanceof DependencyRequest) {
                 dr = (DependencyRequest) data;
             } else if (data instanceof ArtifactRequest) {
@@ -154,49 +145,58 @@ public class TrackingRepositoryListener extends AbstractRepositoryListener {
                     if (location != null && location.getSource() != null) {
                         sb.append(indent.toString()).append(location.getSource().getModelId()).append(" (implicit)\n");
                     }
-                } else if (dr != null) {
-                    baseName = dr.getRoot().toString().replace(":", "_");
-                    trackingFile = trackingDir.resolve(baseName + ext);
-                    if (Files.exists(trackingFile)) {
-                        return;
-                    }
-
-                    StringBuilder indent = new StringBuilder();
-
-                    if (ar != null && ar.getArtifact() != null) {
-                        sb.append(indent.toString()).append(ar.getArtifact()).append("\n");
-                        indent.append("  ");
-                    }
-
-                    sb.append(indent.toString()).append(dr.getRoot()).append("\n");
-                } else if (dmbr != null) {
-                    // null pomfile for org.apache.maven.project.artifact.MavenMetadataSource.retrieveRelocatedProject()
-                    File file = dmbr.getPomFile();
-                    if (file == null && dmbr.getModelSource() instanceof FileModelSource) {
-                        file = ((FileModelSource) dmbr.getModelSource()).getFile();
-                    }
-                    if (file == null) {
-                        return;
-                    }
-                    baseName = file.getAbsolutePath().replace("/", "_").replace("\\", "_").replace(":", "_");
-                    while (baseName.startsWith("_")) {
-                        baseName = baseName.substring(1);
-                    }
-                    trackingFile = trackingDir.resolve(baseName + ext);
-                    if (Files.exists(trackingFile)) {
-                        return;
-                    }
-
-                    StringBuilder indent = new StringBuilder();
-
-                    if (ar != null && ar.getArtifact() != null) {
-                        sb.append(indent.toString()).append(ar.getArtifact()).append("\n");
-                        indent.append("  ");
-                    }
-                    sb.append(indent.toString()).append(file.getAbsolutePath()).append("\n");
+//                } else if (dr != null) {
+//                    baseName = dr.getRoot().toString().replace(":", "_");
+//                    trackingFile = trackingDir.resolve(baseName + ext);
+//                    if (Files.exists(trackingFile)) {
+//                        return;
+//                    }
+//
+//                    StringBuilder indent = new StringBuilder();
+//
+//                    if (ar != null && ar.getArtifact() != null) {
+//                        sb.append(indent.toString()).append(ar.getArtifact()).append("\n");
+//                        indent.append("  ");
+//                    }
+//
+//                    sb.append(indent.toString()).append(dr.getRoot()).append("\n");
+//                } else if (dmbr != null) {
+//                    // null pomfile for org.apache.maven.project.artifact.MavenMetadataSource.retrieveRelocatedProject()
+//                    File file = dmbr.getPomFile();
+//                    if (file == null && dmbr.getModelSource() instanceof FileModelSource) {
+//                        file = ((FileModelSource) dmbr.getModelSource()).getFile();
+//                    }
+//                    if (file == null) {
+//                        return;
+//                    }
+//                    baseName = file.getAbsolutePath().replace("/", "_").replace("\\", "_").replace(":", "_");
+//                    while (baseName.startsWith("_")) {
+//                        baseName = baseName.substring(1);
+//                    }
+//                    trackingFile = trackingDir.resolve(baseName + ext);
+//                    if (Files.exists(trackingFile)) {
+//                        return;
+//                    }
+//
+//                    StringBuilder indent = new StringBuilder();
+//
+//                    if (ar != null && ar.getArtifact() != null) {
+//                        sb.append(indent.toString()).append(ar.getArtifact()).append("\n");
+//                        indent.append("  ");
+//                    }
+//                    sb.append(indent.toString()).append(file.getAbsolutePath()).append("\n");
                 }
             } else {
-                baseName = csd.getPath().get(0).getArtifact().toString().replace(":", "_");
+                Artifact artifact = null;
+                if (csd.getPath() != null && csd.getPath().get(0) != null && csd.getPath().get(0).getArtifact() != null) {
+                    artifact = csd.getPath().get(0).getArtifact();
+                } else if (csd.getNode() != null && csd.getNode().getArtifact() != null) {
+                    artifact = csd.getNode().getArtifact();
+                }
+                if (artifact == null) {
+                    return;
+                }
+                baseName = artifact.toString().replace(":", "_");
                 trackingFile = trackingDir.resolve(baseName + ext);
                 if (Files.exists(trackingFile)) {
                     return;
